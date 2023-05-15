@@ -1,0 +1,13 @@
+[package]
+name = "llm-plugin-utils"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+axum = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+typed-builder = "0.14.0"
+utoipa = { version = "^3.3", features = ["yaml"] }
+url = "2.3.1"
