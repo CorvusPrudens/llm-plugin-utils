@@ -52,30 +52,30 @@ fn test_len(string: impl Into<String>, iden: &str, len: usize) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
 pub struct Manifest {
     #[builder(setter(into))]
-    schema_version: String,
+    pub schema_version: String,
 
     #[builder(setter(transform = |n: impl Into<String>| test_len(n, "name_for_human", MAX_NAME_FOR_HUMAN)))]
-    name_for_human: String,
+    pub name_for_human: String,
 
     #[builder(setter(transform = |n: impl Into<String>| test_len(n, "name_for_model", MAX_NAME_FOR_MODEL)))]
-    name_for_model: String,
+    pub name_for_model: String,
 
     #[builder(setter(transform = |d: impl Into<String>| test_len(d, "description_for_human", MAX_DESCRIPTION_FOR_HUMAN)))]
-    description_for_human: String,
+    pub description_for_human: String,
 
     #[builder(setter(transform = |d: impl Into<String>| test_len(d, "description_for_model", MAX_DESCRIPTION_FOR_MODEL)))]
-    description_for_model: String,
-    auth: ManifestAuth,
-    api: ManifestApi,
+    pub description_for_model: String,
+    pub auth: ManifestAuth,
+    pub api: ManifestApi,
 
     #[builder(setter(into))]
-    logo_url: String,
+    pub logo_url: String,
 
     #[builder(setter(into))]
-    contact_email: String,
+    pub contact_email: String,
 
     #[builder(setter(into))]
-    legal_info_url: String,
+    pub legal_info_url: String,
 }
 
 struct ServeState {
