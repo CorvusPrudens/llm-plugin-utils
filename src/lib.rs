@@ -1,6 +1,6 @@
 use axum::{
-    body::HttpBody,
     body::Full,
+    body::HttpBody,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -12,6 +12,11 @@ use std::sync::Arc;
 use typed_builder::TypedBuilder;
 use url::Url;
 use utoipa::openapi::OpenApi;
+
+pub mod api;
+
+pub use api::chat::{ChatMessage, ChatRequest};
+pub use api::embeddings::{knn_search, string_embeddings, EmbeddingRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
