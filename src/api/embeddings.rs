@@ -104,6 +104,24 @@ pub trait Embedding {
     fn embedding(&self) -> &[f32];
 }
 
+impl Embedding for Vec<f32> {
+    fn embedding(&self) -> &[f32] {
+        return &self;
+    }
+}
+
+impl Embedding for &Vec<f32> {
+    fn embedding(&self) -> &[f32] {
+        return &self;
+    }
+}
+
+impl Embedding for &[f32] {
+    fn embedding(&self) -> &[f32] {
+        return self;
+    }
+}
+
 pub struct EmbeddingDistance<T> {
     item: T,
     distance: NotNan<f32>,
