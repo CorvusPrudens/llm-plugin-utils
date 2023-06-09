@@ -1,4 +1,6 @@
+use futures::stream::StreamExt;
 use reqwest::Client;
+use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use typed_builder::TypedBuilder;
@@ -76,7 +78,7 @@ impl ChatResponse {
 
 impl ChatStream {
     pub fn delta(&self) -> Option<ChatDelta> {
-        self.choices.get(0).map(|c| c.delta.clone())
+        self.choices.get(0).and_then(|c| c.delta.clone())
     }
 }
 
@@ -90,7 +92,7 @@ pub struct ChatChoice {
 #[derive(Debug, Deserialize, Clone)]
 pub struct StreamChoice {
     index: u32,
-    delta: ChatDelta,
+    delta: Option<ChatDelta>,
     finish_reason: Option<String>,
 }
 
@@ -106,6 +108,7 @@ pub struct ChatUsage {
 pub enum ChatMessage {
     User {
         content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
     System {
@@ -126,34 +129,18 @@ impl ChatMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatDelta {
     Role(String),
     Content(String),
-    None,
+    // None,
 }
 
-impl<'de> Deserialize<'de> for ChatDelta {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let msg = Value::deserialize(deserializer)?;
-
-        match msg.get("role") {
-            Some(Value::String(s)) => return Ok(Self::Role(s.clone())),
-            Some(_) => return Err(serde::de::Error::custom("expected role string")),
-            None => {}
-        }
-
-        match msg.get("content") {
-            Some(Value::String(s)) => return Ok(Self::Content(s.clone())),
-            Some(_) => return Err(serde::de::Error::custom("expected content string")),
-            None => {}
-        }
-
-        Ok(ChatDelta::None)
-    }
+#[derive(Debug)]
+pub struct JsonResponse {
+    pub antecedent: String,
+    pub json: Option<String>,
 }
 
 impl ChatRequest {
@@ -172,5 +159,65 @@ impl ChatRequest {
             .error_for_status()?;
 
         Ok(response.json::<ChatResponse>().await?)
+    }
+
+    pub async fn stream_json(
+        self,
+        client: &Client,
+        api_key: &str,
+    ) -> Result<JsonResponse, Box<dyn std::error::Error + Send + Sync>> {
+        if !self.stream {
+            return Err("\"stream\" must be set to true".into());
+        }
+
+        let client = client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&self);
+
+        let mut state = super::parsing::JsonState::Idle;
+        let mut es = EventSource::new(client)?;
+
+        let mut string_response = String::new();
+        let mut json_response = None;
+
+        while let Some(event) = es.next().await {
+            match event {
+                Ok(Event::Open) => {}
+                Ok(Event::Message(message)) => {
+                    if message.data == "[DONE]" {
+                        es.close();
+                        break;
+                    } else {
+                        let stream: crate::api::chat::ChatStream =
+                            serde_json::from_str(&message.data)?;
+                        let delta = stream.delta().ok_or("error getting delta")?;
+
+                        match delta {
+                            ChatDelta::Content(s) => {
+                                let (new_state, json, filtered) =
+                                    super::parsing::parse_json_from_stream(&s, state);
+                                state = new_state;
+                                string_response.push_str(&filtered);
+
+                                if let Some(json) = json {
+                                    json_response = Some(json);
+                                    es.close();
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(JsonResponse {
+            antecedent: string_response,
+            json: json_response,
+        })
     }
 }
