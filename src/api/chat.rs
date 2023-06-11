@@ -1,8 +1,8 @@
 use futures::stream::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_aux::field_attributes::deserialize_default_from_empty_object;
 use typed_builder::TypedBuilder;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -92,6 +92,7 @@ pub struct ChatChoice {
 #[derive(Debug, Deserialize, Clone)]
 pub struct StreamChoice {
     index: u32,
+    #[serde(deserialize_with = "deserialize_default_from_empty_object")]
     delta: Option<ChatDelta>,
     finish_reason: Option<String>,
 }
@@ -120,6 +121,27 @@ pub enum ChatMessage {
 }
 
 impl ChatMessage {
+    pub fn new_user(content: impl Into<String>, name: Option<String>) -> Self {
+        Self::User {
+            content: content.into(),
+            name: name,
+        }
+    }
+
+    pub fn new_system(content: impl Into<String>) -> Self {
+        Self::System {
+            content: content.into(),
+        }
+    }
+
+    pub fn new_assistant(content: impl Into<String>) -> Self {
+        Self::Assistant {
+            content: content.into(),
+        }
+    }
+}
+
+impl ChatMessage {
     pub fn content(&self) -> &str {
         match self {
             Self::User { content, name: _ } => content,
@@ -137,10 +159,31 @@ pub enum ChatDelta {
     // None,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JsonResponse {
     pub antecedent: String,
     pub json: Option<String>,
+}
+
+impl JsonResponse {
+    pub fn to_full_string(&self) -> String {
+        match &self.json {
+            Some(json) => format!("{}{}", self.antecedent, json),
+            None => self.antecedent.clone(),
+        }
+    }
+
+    pub fn deserialize<'de, T: Deserialize<'de>>(
+        &'de self,
+    ) -> Result<Option<T>, Box<dyn std::error::Error + Send + Sync>> {
+        match &self.json {
+            Some(json) => {
+                let output: T = serde_json::from_str(json)?;
+                Ok(Some(output))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 impl ChatRequest {
@@ -192,26 +235,53 @@ impl ChatRequest {
                     } else {
                         let stream: crate::api::chat::ChatStream =
                             serde_json::from_str(&message.data)?;
-                        let delta = stream.delta().ok_or("error getting delta")?;
 
-                        match delta {
-                            ChatDelta::Content(s) => {
-                                let (new_state, json, filtered) =
-                                    super::parsing::parse_json_from_stream(&s, state);
-                                state = new_state;
-                                string_response.push_str(&filtered);
+                        if let Some(delta) = stream.delta() {
+                            match delta {
+                                ChatDelta::Content(s) => {
+                                    print!("{s}");
+                                    let (new_state, json, filtered) =
+                                        super::parsing::parse_json_from_stream(&s, state);
+                                    state = new_state;
+                                    string_response.push_str(&filtered);
 
-                                if let Some(json) = json {
-                                    json_response = Some(json);
-                                    es.close();
-                                    break;
+                                    if let Some(json) = json {
+                                        json_response = Some(json);
+                                        es.close();
+                                        break;
+                                    }
                                 }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    return Err(e.into());
+                }
+                // Err(e) => match e {
+                //     reqwest_eventsource::Error::Utf8(_) => {
+                //         panic!("utf8 error!")
+                //     }
+                //     reqwest_eventsource::Error::InvalidContentType(_) => {
+                //         panic!("invalid content type!")
+                //     }
+                //     reqwest_eventsource::Error::InvalidLastEventId(_) => {
+                //         panic!("invalid last event id!")
+                //     }
+                //     reqwest_eventsource::Error::InvalidStatusCode(_) => {
+                //         panic!("invalid status code!")
+                //     }
+                //     reqwest_eventsource::Error::Parser(_) => {
+                //         panic!("parser error!")
+                //     }
+                //     reqwest_eventsource::Error::StreamEnded => {
+                //         panic!("stream ended!")
+                //     }
+                //     reqwest_eventsource::Error::Transport(_) => {
+                //         panic!("transport error!")
+                //     }
+                // },
             }
         }
 
