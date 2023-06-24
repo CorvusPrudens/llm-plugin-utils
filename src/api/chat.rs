@@ -1,16 +1,29 @@
 use futures::stream::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
-use serde::{Deserialize, Serialize};
+use schemars::{schema::RootSchema, schema_for, JsonSchema};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_aux::field_attributes::deserialize_default_from_empty_object;
 use typed_builder::TypedBuilder;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum ChatModel {
-    #[serde(rename = "gpt-3.5-turbo")]
+    #[serde(rename = "gpt-3.5-turbo-0613")]
     GPT3,
+    #[serde(rename = "gpt-3.5-turbo-16k-0613")]
+    GPT3_16K,
     #[serde(rename = "gpt-4")]
+    GPT4_MAY,
+    #[serde(rename = "gpt-4-0613")]
     GPT4,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FunctionCallType {
+    Auto,
+    None,
+    Name(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, TypedBuilder)]
@@ -18,6 +31,12 @@ pub struct ChatRequest {
     #[builder(default = ChatModel::GPT4)]
     model: ChatModel,
     messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    functions: Option<Vec<Function>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    function_call: Option<FunctionCallType>,
     #[builder(default = 0.7, setter(transform = |f: f32| clamp(f, 0., 2.)))]
     temperature: f32,
     #[builder(default = false)]
@@ -35,7 +54,7 @@ pub struct ChatRequest {
     max_tokens: Option<usize>,
 }
 
-pub fn clamp<T: core::cmp::PartialOrd>(value: T, min: T, max: T) -> T {
+fn clamp<T: core::cmp::PartialOrd>(value: T, min: T, max: T) -> T {
     if value > max {
         return max;
     }
@@ -65,6 +84,20 @@ pub struct ChatStream {
 impl ChatResponse {
     pub fn message(&self) -> Option<&ChatMessage> {
         self.choices.get(0).map(|c| &c.message)
+    }
+
+    pub fn function_call(&self) -> Option<&FunctionCall> {
+        self.message().and_then(|m| {
+            if let ChatMessage::Assistant {
+                content: AssistantContent::FunctionCall { function_call },
+                ..
+            } = m
+            {
+                Some(function_call)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn messages(&self) -> Vec<&ChatMessage> {
@@ -105,6 +138,25 @@ pub struct ChatUsage {
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    name: String,
+    arguments: String,
+}
+
+impl FunctionCall {
+    pub fn to_type<'a, T: Deserialize<'a>>(&'a self) -> Result<T, serde_json::Error> {
+        serde_json::from_str(&self.arguments)
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AssistantContent {
+    Content { content: String },
+    FunctionCall { function_call: FunctionCall },
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum ChatMessage {
     User {
@@ -116,7 +168,15 @@ pub enum ChatMessage {
         content: String,
     },
     Assistant {
+        #[serde(flatten)]
+        content: AssistantContent,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// This describes the result of a function (whose name is given by the name field)
+    Function {
         content: String,
+        name: String,
     },
 }
 
@@ -124,7 +184,7 @@ impl ChatMessage {
     pub fn new_user(content: impl Into<String>, name: Option<String>) -> Self {
         Self::User {
             content: content.into(),
-            name: name,
+            name,
         }
     }
 
@@ -136,17 +196,67 @@ impl ChatMessage {
 
     pub fn new_assistant(content: impl Into<String>) -> Self {
         Self::Assistant {
+            content: AssistantContent::Content {
+                content: content.into(),
+            },
+            name: None,
+        }
+    }
+
+    pub fn new_function(content: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::Function {
             content: content.into(),
+            name: name.into(),
         }
     }
 }
 
 impl ChatMessage {
-    pub fn content(&self) -> &str {
-        match self {
-            Self::User { content, name: _ } => content,
-            Self::System { content } => content,
-            Self::Assistant { content } => content,
+    pub fn content(&self) -> Option<String> {
+        let content = match self {
+            Self::User { content, .. } => content.to_string(),
+            Self::System { content } => content.to_string(),
+            Self::Assistant {
+                content: AssistantContent::Content { content },
+                ..
+            } => content.to_string(),
+            Self::Assistant {
+                content: AssistantContent::FunctionCall { .. },
+                ..
+            } => return None,
+            Self::Function { content, .. } => content.to_string(),
+        };
+
+        Some(content)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Function {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<RootSchema>,
+}
+
+impl Function {
+    pub fn new(name: impl Into<String>, description: Option<String>) -> Self {
+        Self {
+            name: name.into(),
+            description,
+            parameters: None,
+        }
+    }
+
+    pub fn from_object<T: JsonSchema>(
+        name: impl Into<String>,
+        description: Option<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description,
+            parameters: Some(schema_for!(T)),
         }
     }
 }
@@ -236,22 +346,17 @@ impl ChatRequest {
                         let stream: crate::api::chat::ChatStream =
                             serde_json::from_str(&message.data)?;
 
-                        if let Some(delta) = stream.delta() {
-                            match delta {
-                                ChatDelta::Content(s) => {
-                                    print!("{s}");
-                                    let (new_state, json, filtered) =
-                                        super::parsing::parse_json_from_stream(&s, state);
-                                    state = new_state;
-                                    string_response.push_str(&filtered);
+                        if let Some(ChatDelta::Content(s)) = stream.delta() {
+                            print!("{s}");
+                            let (new_state, json, filtered) =
+                                super::parsing::parse_json_from_stream(&s, state);
+                            state = new_state;
+                            string_response.push_str(&filtered);
 
-                                    if let Some(json) = json {
-                                        json_response = Some(json);
-                                        es.close();
-                                        break;
-                                    }
-                                }
-                                _ => {}
+                            if let Some(json) = json {
+                                json_response = Some(json);
+                                es.close();
+                                break;
                             }
                         }
                     }

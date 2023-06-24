@@ -106,19 +106,19 @@ pub trait Embedding {
 
 impl Embedding for Vec<f32> {
     fn embedding(&self) -> &[f32] {
-        return &self;
+        self
     }
 }
 
 impl Embedding for &Vec<f32> {
     fn embedding(&self) -> &[f32] {
-        return &self;
+        self
     }
 }
 
 impl Embedding for &[f32] {
     fn embedding(&self) -> &[f32] {
-        return self;
+        self
     }
 }
 
