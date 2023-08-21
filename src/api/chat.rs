@@ -147,6 +147,14 @@ impl FunctionCall {
     pub fn to_type<'a, T: Deserialize<'a>>(&'a self) -> Result<T, serde_json::Error> {
         serde_json::from_str(&self.arguments)
     }
+
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    pub fn arguments(&self) -> String {
+        self.arguments.clone()
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
