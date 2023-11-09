@@ -2,11 +2,12 @@ use futures::stream::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
 use schemars::{schema::RootSchema, schema_for, JsonSchema};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_aux::field_attributes::deserialize_default_from_empty_object;
 use typed_builder::TypedBuilder;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
 pub enum ChatModel {
     #[serde(rename = "gpt-3.5-turbo-0613")]
     GPT3,
@@ -16,6 +17,8 @@ pub enum ChatModel {
     GPT4_MAY,
     #[serde(rename = "gpt-4-0613")]
     GPT4,
+    #[serde(rename = "gpt-4-1106-preview")]
+    GPT4_TURBO,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
